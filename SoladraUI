@@ -1,0 +1,363 @@
+-- SoladraUI By Nugget
+-- This is a remake of SimpleIndex with a cleaner more responsive UI.
+-- Use the SimpleIndex Documentation for help: https://github.com/MasterNoob6291/SimpleIndex/blob/main/Documentation
+
+local UIS = game:GetService("UserInputService")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+-- === GUI CREATION ===
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "MainCommandBar"
+ScreenGui.Parent = player:WaitForChild("PlayerGui")
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+ScreenGui.ResetOnSpawn = false
+
+-- Command bar background (bottom bar)
+local Bg = Instance.new("Frame")
+Bg.Parent = ScreenGui
+Bg.AnchorPoint = Vector2.new(0.5, 1)
+Bg.Position = UDim2.new(0.5, 0, 1, 0)
+Bg.Size = UDim2.new(1, 0, 0.05, 0)
+Bg.BackgroundColor3 = Color3.fromRGB(34, 34, 34)
+Bg.BackgroundTransparency = 0.8
+Bg.BorderSizePixel = 0
+Bg.Visible = false
+
+-- TextBox
+local MainText = Instance.new("TextBox")
+MainText.Parent = Bg
+MainText.Size = UDim2.new(1, 0, 1, 0)
+MainText.BackgroundTransparency = 1
+MainText.Font = Enum.Font.Sarpanch
+MainText.Text = "%:"
+MainText.TextColor3 = Color3.fromRGB(247, 119, 93)
+MainText.TextScaled = true
+MainText.TextXAlignment = Enum.TextXAlignment.Left
+MainText.ClearTextOnFocus = false
+
+-- Autocomplete bar (sits just above Bg)
+local SuggestionBg = Instance.new("Frame")
+SuggestionBg.Parent = ScreenGui
+SuggestionBg.AnchorPoint = Vector2.new(0.5, 1)
+SuggestionBg.Position = UDim2.new(0.5, 0, 0.95, 0) -- just above Bg
+SuggestionBg.Size = UDim2.new(1, 0, 0.04, 0)
+SuggestionBg.BackgroundColor3 = Color3.fromRGB(34, 34, 34)
+SuggestionBg.BackgroundTransparency = 0.85
+SuggestionBg.BorderSizePixel = 0
+SuggestionBg.Visible = false
+
+local SuggestionLayout = Instance.new("UIListLayout")
+SuggestionLayout.Parent = SuggestionBg
+SuggestionLayout.FillDirection = Enum.FillDirection.Horizontal
+SuggestionLayout.SortOrder = Enum.SortOrder.LayoutOrder
+SuggestionLayout.Padding = UDim.new(0, 6)
+SuggestionLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+
+-- === STATE ===
+local isOpen = false
+local PREFIX = ""
+local Commands = {}
+local AutocompleteTypes = {}
+local currentMatches = {}
+
+-- === NOTIFY ===
+local notificationQueue = {}
+local isShowingNotification = false
+
+local function Notify(alertText, messageText, displayTime)
+	displayTime = displayTime or 3
+	table.insert(notificationQueue, {alertText, messageText, displayTime})
+	if isShowingNotification then return end
+
+	task.spawn(function()
+		while #notificationQueue > 0 do
+			isShowingNotification = true
+			local current = table.remove(notificationQueue, 1)
+			local aText, mText, dTime = unpack(current)
+
+			-- Notification bar (sits above suggestion bar)
+			local NotifBg = Instance.new("Frame")
+			NotifBg.Parent = ScreenGui
+			NotifBg.AnchorPoint = Vector2.new(0.5, 0)
+			NotifBg.Position = UDim2.new(0.5, 0, 0, 0)
+			NotifBg.Size = UDim2.new(1, 0, 0.04, 0)
+			NotifBg.BackgroundColor3 = Color3.fromRGB(34, 34, 34)
+			NotifBg.BackgroundTransparency = 0.8
+			NotifBg.BorderSizePixel = 0
+
+			local NotifLabel = Instance.new("TextLabel")
+			NotifLabel.Parent = NotifBg
+			NotifLabel.Size = UDim2.new(1, -12, 1, 0)
+			NotifLabel.Position = UDim2.new(0, 8, 0, 0)
+			NotifLabel.BackgroundTransparency = 1
+			NotifLabel.Font = Enum.Font.Sarpanch
+			NotifLabel.TextColor3 = Color3.fromRGB(247, 119, 93)
+			NotifLabel.TextScaled = true
+			NotifLabel.TextXAlignment = Enum.TextXAlignment.Left
+			NotifLabel.Text = aText .. "  —  " .. mText
+
+			task.wait(dTime)
+			NotifBg:Destroy()
+		end
+		isShowingNotification = false
+	end)
+end
+
+-- === OPEN / CLOSE ===
+local function openBar()
+	isOpen = true
+	Bg.Visible = true
+	MainText.Text = PREFIX
+	MainText:CaptureFocus()
+end
+
+local function closeBar()
+	isOpen = false
+	Bg.Visible = false
+	SuggestionBg.Visible = false
+	MainText.Text = PREFIX
+	currentMatches = {}
+end
+
+-- Toggle with "-" key
+UIS.InputBegan:Connect(function(input, gpe)
+	if gpe then return end
+	if input.KeyCode == Enum.KeyCode.Minus then
+		if isOpen then closeBar() else openBar() end
+	end
+end)
+
+-- === COMMAND SYSTEM ===
+local function command(name, func, description, autocomplete)
+	Commands[name:lower()] = {
+		func = func,
+		description = description or "No description provided",
+		autocomplete = autocomplete or {}
+	}
+end
+
+local function getTargetPlayers(arg)
+	if not arg or arg == "" then
+		Notify("Error", "No player listed.", 3) return {}
+	end
+	arg = arg:lower()
+	local localPlayer = Players.LocalPlayer
+	local targets = {}
+
+	if arg == "me" then
+		table.insert(targets, localPlayer)
+	elseif arg == "others" then
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr ~= localPlayer then table.insert(targets, plr) end
+		end
+	elseif arg == "all" then
+		targets = Players:GetPlayers()
+	elseif arg == "random" then
+		local all = Players:GetPlayers()
+		if #all > 0 then targets = { all[math.random(1, #all)] } end
+	else
+		for _, plr in ipairs(Players:GetPlayers()) do
+			if plr.Name:sub(1, #arg):lower() == arg then
+				table.insert(targets, plr)
+			end
+		end
+	end
+	return targets
+end
+
+-- === AUTOCOMPLETE UI ===
+local function clearSuggestions()
+	for _, child in ipairs(SuggestionBg:GetChildren()) do
+		if child:IsA("TextLabel") then child:Destroy() end
+	end
+end
+
+local function showSuggestions(matches)
+	clearSuggestions()
+	if #matches == 0 then
+		SuggestionBg.Visible = false
+		return
+	end
+
+	SuggestionBg.Visible = true
+
+	for i, name in ipairs(matches) do
+		local label = Instance.new("TextLabel")
+		label.Parent = SuggestionBg
+		label.BackgroundTransparency = 1
+		label.Size = UDim2.new(0, 0, 1, 0)
+		label.AutomaticSize = Enum.AutomaticSize.X
+		label.Font = Enum.Font.Sarpanch
+		label.TextScaled = true
+		label.TextColor3 = Color3.fromRGB(247, 119, 93)
+		label.TextXAlignment = Enum.TextXAlignment.Left
+		label.Text = i == 1 and name or " |  " .. name
+		label.LayoutOrder = i
+	end
+end
+
+local function getMatches(text)
+	if text == "" then return {} end
+	local matches = {}
+	for name in pairs(Commands) do
+		if name:sub(1, #text):lower() == text:lower() then
+			table.insert(matches, name)
+		end
+	end
+	table.sort(matches)
+	return matches
+end
+
+-- === TEXTBOX CHANGE ===
+MainText:GetPropertyChangedSignal("Text"):Connect(function()
+	local text = MainText.Text
+	if not isOpen then return end
+
+	-- Strip prefix
+	if PREFIX ~= "" and text:sub(1, #PREFIX) ~= PREFIX then
+		MainText.Text = PREFIX
+		return
+	end
+
+	local content = text:sub(#PREFIX + 1)
+	local parts = string.split(content, " ")
+	local cmdName = parts[1]:lower()
+	local cmd = Commands[cmdName]
+
+	-- Suggest command names
+	if #parts == 1 and content:sub(-1) ~= " " then
+		currentMatches = getMatches(cmdName)
+		showSuggestions(currentMatches)
+		return
+	end
+
+	if not cmd then
+		showSuggestions({})
+		currentMatches = {}
+		return
+	end
+
+	-- Determine argument index
+	local trailingSpace = content:sub(-1) == " "
+	local argIndex = trailingSpace and (#parts + 1) or #parts
+	local argText = trailingSpace and "" or parts[#parts]
+
+	if argIndex - 1 > #cmd.autocomplete then
+		showSuggestions({})
+		currentMatches = {}
+		return
+	end
+
+	local prevArgs = {}
+	for i = 2, argIndex - 1 do
+		if cmd.autocomplete[i] == cmd.autocomplete[argIndex - 1] then
+			table.insert(prevArgs, parts[i])
+		end
+	end
+
+	local autoType = cmd.autocomplete[argIndex - 1]
+	local func = AutocompleteTypes[autoType]
+	if func then
+		currentMatches = func(argText, prevArgs)
+		for _, match in ipairs(currentMatches) do
+			if match:lower() == argText:lower() then
+				currentMatches = {}
+				break
+			end
+		end
+		showSuggestions(currentMatches)
+	else
+		currentMatches = {}
+		showSuggestions({})
+	end
+end)
+
+-- === SPACE AUTOFILL ===
+UIS.InputBegan:Connect(function(input, gpe)
+	if not isOpen then return end
+	if input.KeyCode == Enum.KeyCode.Space then
+		if currentMatches and #currentMatches > 0 then
+			local text = MainText.Text
+			local content = text:sub(#PREFIX + 1)
+			local parts = string.split(content, " ")
+			local trailingSpace = content:sub(-1) == " "
+			local argIndex = trailingSpace and (#parts + 1) or #parts
+
+			if currentMatches[1] then
+				parts[argIndex] = currentMatches[1]
+				MainText.Text = PREFIX .. table.concat(parts, " ")
+				MainText.CursorPosition = #MainText.Text + 1
+				showSuggestions({})
+			end
+		end
+	end
+end)
+
+-- === EXECUTE COMMAND ===
+MainText.FocusLost:Connect(function(enterPressed)
+	if not isOpen then return end
+
+	if not enterPressed then
+		MainText:CaptureFocus()
+		return
+	end
+
+	local inputText = MainText.Text
+	if inputText:sub(1, #PREFIX) ~= PREFIX then
+		closeBar()
+		return
+	end
+
+	inputText = inputText:sub(#PREFIX + 1)
+	inputText = inputText:lower():gsub("^%s*(.-)%s*$", "%1")
+
+	if inputText == "" then
+		closeBar()
+		return
+	end
+
+	local parts = string.split(inputText, " ")
+	local cmdName = table.remove(parts, 1)
+	local cmd = Commands[cmdName or ""]
+
+	if cmd then
+		task.spawn(cmd.func, parts)
+	else
+		Notify("Error", string.format("Unknown Command: %s%s", PREFIX, cmdName))
+	end
+
+	closeBar()
+end)
+
+-- === AUTOCOMPLETE HELPER ===
+function AutocompleteTypes.simple(func)
+	return function(input, prevArgs)
+		if input == "" then return {} end
+		local used = {}
+		for _, arg in ipairs(prevArgs or {}) do
+			used[arg:lower()] = true
+		end
+		local matches = func(input, used) or {}
+		table.sort(matches)
+		return matches
+	end
+end
+
+print("SoladraUI Loaded - Version 1.0")
+
+command("cmds", function(args)
+	print("===== Available Commands =====")
+	for name, data in pairs(Commands) do
+		print("- " .. name .. ": " .. data.description)
+	end
+	print("==============================")
+end, "Lists all commands.")
+
+return {
+	command = command,
+	Commands = Commands,
+	AutocompleteTypes = AutocompleteTypes,
+	Notify = Notify,
+	getTargetPlayers = getTargetPlayers
+}
