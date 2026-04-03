@@ -109,6 +109,7 @@ local function openBar()
 	isOpen = true
 	Bg.Visible = true
 	MainText.Text = PREFIX
+	task.wait()
 	MainText:CaptureFocus()
 end
 
